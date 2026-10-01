@@ -1,0 +1,563 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#2563eb">
+<title>シフト登録</title>
+<link rel="manifest" href="manifest.webmanifest">
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<style>
+  :root { --c: #2563eb; --bg: #f8fafc; --line: #cbd5e1; --warn: #fef3c7; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif; background: var(--bg); color: #0f172a; }
+  header { background: var(--c); color: #fff; padding: 12px 16px; }
+  header h1 { margin: 0; font-size: 18px; }
+  main { max-width: 720px; margin: 0 auto; padding: 8px 16px 48px; }
+  section { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin: 12px 0; }
+  h2 { font-size: 16px; margin: 0 0 8px; }
+  label { display: inline-flex; align-items: center; gap: 6px; margin: 4px 12px 4px 0; }
+  input, select, button, textarea { font-size: 16px; }
+  input[type=text], input[type=month], input[type=time], input[type=number] { padding: 4px 6px; }
+  button { padding: 8px 14px; border-radius: 8px; border: 1px solid var(--c); background: #fff; color: var(--c); }
+  button.primary { background: var(--c); color: #fff; }
+  button:disabled { opacity: .4; }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 8px 0; }
+  #viewer { overflow: auto; max-height: 70vh; border: 1px solid var(--line); background: #e2e8f0; touch-action: pan-x pan-y; }
+  #cv { display: block; }
+  .hint { font-size: 14px; color: #334155; background: #eff6ff; padding: 8px; border-radius: 6px; }
+  .small { font-size: 13px; color: #475569; }
+  table { width: 100%; border-collapse: collapse; font-size: 15px; }
+  th, td { border-bottom: 1px solid #e2e8f0; padding: 4px; text-align: left; }
+  td.d { white-space: nowrap; }
+  tr.sun td.d { color: #dc2626; } tr.sat td.d { color: #2563eb; }
+  tr.low { background: var(--warn); }
+  td img { height: 32px; vertical-align: middle; border: 1px solid #e2e8f0; }
+  td input[type=time] { width: 6.5em; }
+  textarea { width: 100%; font-family: monospace; }
+  progress { width: 100%; }
+</style>
+</head>
+<body>
+<header><h1>シフト → カレンダー登録</h1></header>
+<main>
+
+<section>
+  <h2>1. 設定</h2>
+  <label>名前 <input type="text" id="name" size="8" placeholder="例：山田"></label>
+  <label>対象月 <input type="month" id="ym"></label>
+  <details>
+    <summary class="small">シフト記号と時間（表の凡例が変わったら編集）</summary>
+    <textarea id="shiftDef" rows="10"></textarea>
+    <div class="small">「記号 開始-終了」を1行に1つ書きます。休・有・* は休みとして扱います。</div>
+  </details>
+</section>
+
+<section>
+  <h2>2. 写真を読み込む</h2>
+  <input type="file" id="file" accept="image/*">
+  <div class="toolbar">
+    <button id="rot">↻ 90°回転</button>
+    <button id="zoomOut">－</button><span id="zoomLbl">100%</span><button id="zoomIn">＋</button>
+    <label class="small">枠の大きさ <input type="range" id="box" min="0.4" max="1.2" step="0.05" value="0.8"></label>
+  </div>
+  <p class="hint" id="hint">写真を選んでください。</p>
+  <div id="viewer"><canvas id="cv" width="10" height="10"></canvas></div>
+  <div class="toolbar">
+    <button id="reset">タップをやり直す</button>
+    <button id="ocr" class="primary" disabled>読み取る</button>
+  </div>
+  <progress id="prog" value="0" max="1" hidden></progress>
+  <div class="small" id="ocrMsg"></div>
+</section>
+
+<section>
+  <h2>3. 確認・修正</h2>
+  <p class="small">黄色の行は読み取りに自信がない日です。写真の切り抜きと見比べて直してください。写真を使わずに、ここで直接入力することもできます。</p>
+  <table>
+    <thead><tr><th>日付</th><th>読取</th><th>記号</th><th>時間</th></tr></thead>
+    <tbody id="grid"></tbody>
+  </table>
+</section>
+
+<section>
+  <h2>4. カレンダーに登録</h2>
+  <label>前日の通知 <input type="time" id="remPrev" value="21:00"></label>
+  <label>当日の通知 出勤の <input type="number" id="remDay" value="60" min="0" step="5" style="width:4.5em"> 分前</label>
+  <br>
+  <label><input type="checkbox" id="gmode"> Googleカレンダー用（通知を別の予定として作る）</label>
+  <div class="toolbar">
+    <button id="dl" class="primary">.icsをダウンロード</button>
+    <button id="share">共有…</button>
+  </div>
+  <div class="small" id="sum"></div>
+  <details class="small">
+    <summary>登録のしかた</summary>
+    <p><b>iPhone（標準カレンダー）</b>：Safariで「.icsをダウンロード」→「すべて追加」。前日・当日の通知は予定に含まれています。</p>
+    <p><b>Googleカレンダー（Android/iPhone）</b>：Googleは.icsを取り込むと通知設定を捨ててしまいます。そこで「Googleカレンダー用」にチェックを入れて出力してください。
+      ① PCのブラウザで calendar.google.com を開き、「シフト」という専用カレンダーを作る ②
+      そのカレンダーのデフォルト通知を「0分前」にする ③ 設定 →「インポート」で.icsをそのカレンダーに取り込む。
+      「🔔明日…」「🔔今日…」という通知用の予定が入り、その時刻に通知が届きます。</p>
+    <p>同じ月を出力し直すと予定が二重になることがあります。その場合は古い予定を消してから取り込んでください。</p>
+  </details>
+</section>
+
+</main>
+<script>
+const DEFAULT_SHIFTS = `A 9:30-18:00
+B 11:40-20:10
+C 10:30-19:00
+D 9:00-18:00
+E 9:30-18:30
+F 10:30-19:30
+G 11:10-20:10
+H 9:30-17:30
+I 10:30-18:30
+J 12:10-20:10
+K 9:00-18:30
+L 9:30-19:00
+M 10:00-19:30
+N 10:40-20:10
+O 9:40-20:10
+P 9:30-16:15
+Q 9:30-17:45
+R 9:30-16:45`;
+const OFF = ['休', '有', '*'];
+const LETTERS = 'ABCDEFGHIJKLMNOPQR';
+const $ = id => document.getElementById(id);
+
+// ---------- 保存 ----------
+const store = {
+  get(k, d) { try { const v = localStorage.getItem('kintai.' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem('kintai.' + k, JSON.stringify(v)); } catch {} },
+};
+
+// ---------- 設定 ----------
+function defaultYm() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+}
+$('name').value = store.get('name', '');
+$('ym').value = store.get('ym', defaultYm());
+$('shiftDef').value = store.get('shiftDef', DEFAULT_SHIFTS);
+$('remPrev').value = store.get('remPrev', '21:00');
+$('remDay').value = store.get('remDay', 60);
+$('gmode').checked = store.get('gmode', false);
+for (const id of ['name', 'remPrev', 'remDay', 'shiftDef']) {
+  $(id).addEventListener('change', () => { store.set(id, $(id).value); if (id === 'shiftDef') renderGrid(); });
+}
+$('gmode').addEventListener('change', () => store.set('gmode', $('gmode').checked));
+$('ym').addEventListener('change', () => { store.set('ym', $('ym').value); loadRows(); renderGrid(); updateHint(); draw(); });
+
+function shifts() {
+  const map = {};
+  for (const line of $('shiftDef').value.split('\n')) {
+    const m = line.trim().match(/^(\S)\s+(\d{1,2}:\d{2})\s*[-~〜～]\s*(\d{1,2}:\d{2})/);
+    if (m) map[m[1].toUpperCase()] = { start: m[2].padStart(5, '0'), end: m[3].padStart(5, '0') };
+  }
+  return map;
+}
+function ymParts() { const [y, m] = $('ym').value.split('-').map(Number); return { y, m, days: new Date(y, m, 0).getDate() }; }
+
+// ---------- 日ごとのデータ ----------
+// rows[i] = { code, start, end, conf, img }
+let rows = [];
+function loadRows() {
+  const { days } = ymParts();
+  const saved = store.get('rows.' + $('ym').value, []);
+  rows = Array.from({ length: days }, (_, i) => ({ code: '', start: '', end: '', conf: null, img: null, ...(saved[i] || {}) }));
+}
+function saveRows() {
+  store.set('rows.' + $('ym').value, rows.map(({ code, start, end }) => ({ code, start, end })));
+}
+
+function renderGrid() {
+  const { y, m } = ymParts();
+  const sh = shifts();
+  const opts = ['', ...Object.keys(sh), ...OFF, '他'];
+  const tb = $('grid');
+  tb.innerHTML = '';
+  rows.forEach((r, i) => {
+    const dt = new Date(y, m - 1, i + 1);
+    const wd = dt.getDay();
+    const tr = document.createElement('tr');
+    if (wd === 0) tr.className = 'sun'; else if (wd === 6) tr.className = 'sat';
+    if (r.conf != null && r.conf < 70) tr.classList.add('low');
+    const tdD = document.createElement('td'); tdD.className = 'd';
+    tdD.textContent = `${m}/${i + 1}(${'日月火水木金土'[wd]})`;
+    const tdI = document.createElement('td');
+    if (r.img) { const im = new Image(); im.src = r.img; tdI.appendChild(im); }
+    const tdS = document.createElement('td');
+    const sel = document.createElement('select');
+    for (const o of opts) { const op = document.createElement('option'); op.value = o; op.textContent = o || '—'; sel.appendChild(op); }
+    sel.value = opts.includes(r.code) ? r.code : '';
+    tdS.appendChild(sel);
+    const tdT = document.createElement('td');
+    const st = document.createElement('input'); st.type = 'time';
+    const en = document.createElement('input'); en.type = 'time';
+    const sync = () => {
+      const def = sh[r.code];
+      const custom = r.code === '他';
+      st.hidden = en.hidden = !(def || custom);
+      st.value = r.start || def?.start || '';
+      en.value = r.end || def?.end || '';
+    };
+    sel.addEventListener('change', () => { r.code = sel.value; r.start = r.end = ''; r.conf = null; tr.classList.remove('low'); sync(); saveRows(); summary(); });
+    st.addEventListener('change', () => { r.start = st.value; saveRows(); });
+    en.addEventListener('change', () => { r.end = en.value; saveRows(); });
+    sync();
+    tdT.append(st, ' ', en);
+    tr.append(tdD, tdI, tdS, tdT);
+    tb.appendChild(tr);
+  });
+  summary();
+}
+
+// ---------- 画像とタップ ----------
+let src = null;          // 回転済みの元画像（canvas）
+let zoom = 1;
+let pts = [];            // タップした点（元画像の座標）: [1日目, 末日]
+const cv = $('cv'), ctx = cv.getContext('2d');
+
+$('file').addEventListener('change', async e => {
+  const f = e.target.files[0]; if (!f) return;
+  const img = new Image();
+  img.src = URL.createObjectURL(f);
+  await img.decode();
+  const MAX = 3200;
+  const k = Math.min(1, MAX / Math.max(img.naturalWidth, img.naturalHeight));
+  src = document.createElement('canvas');
+  src.width = Math.round(img.naturalWidth * k); src.height = Math.round(img.naturalHeight * k);
+  src.getContext('2d').drawImage(img, 0, 0, src.width, src.height);
+  URL.revokeObjectURL(img.src);
+  pts = []; zoom = 1;
+  draw(); updateHint();
+});
+
+$('rot').addEventListener('click', () => {
+  if (!src) return;
+  const c = document.createElement('canvas');
+  c.width = src.height; c.height = src.width;
+  const g = c.getContext('2d');
+  g.translate(c.width, 0); g.rotate(Math.PI / 2); g.drawImage(src, 0, 0);
+  src = c; pts = []; draw(); updateHint();
+});
+$('zoomIn').addEventListener('click', () => { zoom = Math.min(6, zoom * 1.5); draw(); });
+$('zoomOut').addEventListener('click', () => { zoom = Math.max(1, zoom / 1.5); draw(); });
+$('box').addEventListener('input', draw);
+$('reset').addEventListener('click', () => { pts = []; draw(); updateHint(); });
+
+cv.addEventListener('click', e => {
+  if (!src) return;
+  const r = cv.getBoundingClientRect();
+  const p = { x: (e.clientX - r.left) * src.width / r.width, y: (e.clientY - r.top) * src.height / r.height };
+  if (pts.length >= 2) pts = [];
+  pts.push(p);
+  draw(); updateHint();
+});
+
+function updateHint() {
+  const { m, days } = ymParts();
+  const nm = $('name').value || '自分';
+  let t;
+  if (!src) t = '写真を選んでください。';
+  else if (pts.length === 0) t = `① ${nm}さんの行の「${m}/1」のマスの中心をタップしてください（＋で拡大できます。写真は逆さまのままで大丈夫です）。`;
+  else if (pts.length === 1) t = `② 同じ行の「${m}/${days}」（末日）のマスの中心をタップしてください。`;
+  else t = '青い枠が各日のマスに重なっていれば「読み取る」を押してください。ずれている場合はタップし直すか、「枠の大きさ」で調整してください。';
+  $('hint').textContent = t;
+  $('ocr').disabled = !(src && pts.length === 2);
+}
+
+function cellGeom() {
+  const { days } = ymParts();
+  const [a, b] = pts;
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const step = Math.hypot(dx, dy) / (days - 1);
+  const ang = Math.atan2(dy, dx);
+  const size = step * Number($('box').value);
+  return Array.from({ length: days }, (_, i) => ({ x: a.x + dx * i / (days - 1), y: a.y + dy * i / (days - 1), ang, size }));
+}
+
+function draw() {
+  if (!src) return;
+  const vw = $('viewer').clientWidth;
+  const scale = vw * zoom / src.width;
+  cv.width = Math.round(src.width * scale); cv.height = Math.round(src.height * scale);
+  $('zoomLbl').textContent = Math.round(zoom * 100) + '%';
+  ctx.drawImage(src, 0, 0, cv.width, cv.height);
+  ctx.save(); ctx.scale(scale, scale);
+  if (pts.length === 2) {
+    ctx.strokeStyle = 'rgba(37,99,235,.9)'; ctx.lineWidth = 2 / scale;
+    for (const c of cellGeom()) {
+      ctx.save(); ctx.translate(c.x, c.y); ctx.rotate(c.ang);
+      ctx.strokeRect(-c.size / 2, -c.size / 2, c.size, c.size);
+      ctx.restore();
+    }
+  }
+  ctx.fillStyle = '#dc2626';
+  pts.forEach(p => { ctx.beginPath(); ctx.arc(p.x, p.y, 6 / scale, 0, Math.PI * 2); ctx.fill(); });
+  ctx.restore();
+}
+window.addEventListener('resize', draw);
+
+// ---------- 1マス切り出し＆二値化 ----------
+// 枠の1.6倍の範囲を切り出して二値化・罫線除去し、中心に一番近い文字のかたまりを取り出す
+const WIN = 160, OUT = 64, PAD = 16;
+function cutCell(c) {
+  const win = document.createElement('canvas');
+  win.width = win.height = WIN;
+  const g = win.getContext('2d', { willReadFrequently: true });
+  g.fillStyle = '#fff'; g.fillRect(0, 0, WIN, WIN);
+  // 行の向きが右向きになるよう回転（逆さまの写真なら180°回る）
+  const span = c.size * 1.6;
+  g.translate(WIN / 2, WIN / 2);
+  g.rotate(-c.ang);
+  g.scale(WIN / span, WIN / span);
+  g.translate(-c.x, -c.y);
+  g.drawImage(src, 0, 0);
+  g.setTransform(1, 0, 0, 1, 0, 0);
+
+  const d = g.getImageData(0, 0, WIN, WIN).data;
+  const total = WIN * WIN;
+  const gray = new Uint8Array(total);
+  for (let i = 0; i < total; i++) gray[i] = (d[i * 4] * 0.299 + d[i * 4 + 1] * 0.587 + d[i * 4 + 2] * 0.114) | 0;
+  // 大津の二値化
+  const hist = new Array(256).fill(0);
+  for (let i = 0; i < total; i++) hist[gray[i]]++;
+  let sum = 0; for (let t = 0; t < 256; t++) sum += t * hist[t];
+  let sumB = 0, wB = 0, best = 0, th = 128;
+  for (let t = 0; t < 256; t++) {
+    wB += hist[t]; if (!wB) continue;
+    const wF = total - wB; if (!wF) break;
+    sumB += t * hist[t];
+    const mB = sumB / wB, mF = (sum - sumB) / wF;
+    const v = wB * wF * (mB - mF) ** 2;
+    if (v > best) { best = v; th = t; }
+  }
+  const bin = new Uint8Array(total);
+  for (let i = 0; i < total; i++) bin[i] = gray[i] < th ? 1 : 0;
+  // 罫線（長く続く黒い線）を消す。線のにじみ分として前後1pxも消す
+  const rowsOff = [], colsOff = [];
+  for (let y = 0; y < WIN; y++) { let n = 0; for (let x = 0; x < WIN; x++) n += bin[y * WIN + x]; if (n > WIN * 0.5) rowsOff.push(y); }
+  for (let x = 0; x < WIN; x++) { let n = 0; for (let y = 0; y < WIN; y++) n += bin[y * WIN + x]; if (n > WIN * 0.5) colsOff.push(x); }
+  for (const y0 of rowsOff) for (let y = Math.max(0, y0 - 1); y <= Math.min(WIN - 1, y0 + 1); y++) bin.fill(0, y * WIN, (y + 1) * WIN);
+  for (const x0 of colsOff) for (let x = Math.max(0, x0 - 1); x <= Math.min(WIN - 1, x0 + 1); x++) for (let y = 0; y < WIN; y++) bin[y * WIN + x] = 0;
+
+  // 中心に近い文字のかたまり（範囲）を探す：投影のすき間で区切って中心に一番近い区間を選ぶ
+  const pick = (prof, lo, hi) => {
+    const runs = []; let s = -1;
+    for (let i = lo; i <= hi; i++) {
+      const on = i < hi && prof[i] > 0;
+      if (on && s < 0) s = i;
+      if (!on && s >= 0) { runs.push([s, i - 1]); s = -1; }
+    }
+    // 近いすき間（文字内の切れ目）はつなぐ
+    const merged = [];
+    for (const r of runs) {
+      const last = merged[merged.length - 1];
+      if (last && r[0] - last[1] <= WIN * 0.06) last[1] = r[1]; else merged.push([...r]);
+    }
+    const mid = WIN / 2;
+    let best = null, bd = Infinity;
+    for (const r of merged) {
+      if (r[1] - r[0] < 2) continue;
+      const dd = r[0] <= mid && mid <= r[1] ? 0 : Math.min(Math.abs(r[0] - mid), Math.abs(r[1] - mid));
+      if (dd < bd) { bd = dd; best = r; }
+    }
+    return bd < WIN * 0.3 ? best : null;
+  };
+  const colP = new Array(WIN).fill(0);
+  for (let y = 0; y < WIN; y++) for (let x = 0; x < WIN; x++) colP[x] += bin[y * WIN + x];
+  const xr = pick(colP, 0, WIN);
+  let yr = null;
+  if (xr) {
+    const rowP = new Array(WIN).fill(0);
+    for (let y = 0; y < WIN; y++) for (let x = xr[0]; x <= xr[1]; x++) rowP[y] += bin[y * WIN + x];
+    yr = pick(rowP, 0, WIN);
+  }
+
+  // 出力：取り出した文字を白地の中央に置く
+  const can = document.createElement('canvas');
+  can.width = can.height = OUT + PAD * 2;
+  const o = can.getContext('2d');
+  o.fillStyle = '#fff'; o.fillRect(0, 0, can.width, can.height);
+  if (!xr || !yr) return { canvas: can, ink: 0, h: 0 };
+  const bw = xr[1] - xr[0] + 1, bh = yr[1] - yr[0] + 1;
+  const tmp = new ImageData(bw, bh);
+  let ink = 0;
+  for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
+    const v = bin[(yr[0] + y) * WIN + xr[0] + x];
+    ink += v;
+    const i = (y * bw + x) * 4;
+    tmp.data[i] = tmp.data[i + 1] = tmp.data[i + 2] = v ? 0 : 255; tmp.data[i + 3] = 255;
+  }
+  const t = document.createElement('canvas'); t.width = bw; t.height = bh;
+  t.getContext('2d').putImageData(tmp, 0, 0);
+  const k = OUT / Math.max(bw, bh);
+  o.imageSmoothingEnabled = true;
+  o.drawImage(t, (can.width - bw * k) / 2, (can.height - bh * k) / 2, bw * k, bh * k);
+  return { canvas: can, ink: ink / total, h: bh };
+}
+
+// ---------- OCR ----------
+let engW = null, jpnW = null;
+async function workers() {
+  // 1文字モード(10)より単語モード(8)のほうが、この表では認識率が高い
+  const psm = Tesseract.PSM.SINGLE_WORD;
+  if (!engW) {
+    $('ocrMsg').textContent = '文字認識の準備中（初回は数十秒かかります）…';
+    engW = await Tesseract.createWorker('eng');
+    await engW.setParameters({ tessedit_pageseg_mode: psm, tessedit_char_whitelist: LETTERS + '*' });
+  }
+  if (!jpnW) {
+    jpnW = await Tesseract.createWorker('jpn');
+    await jpnW.setParameters({ tessedit_pageseg_mode: psm, tessedit_char_whitelist: '休有' });
+  }
+}
+
+$('ocr').addEventListener('click', async () => {
+  $('ocr').disabled = true;
+  const prog = $('prog'); prog.hidden = false; prog.value = 0;
+  try {
+    await workers();
+    const cells = cellGeom();
+    prog.max = cells.length;
+    // 1周目：英字(A〜R)を読む
+    const cuts = [];
+    for (let i = 0; i < cells.length; i++) {
+      $('ocrMsg').textContent = `読み取り中… ${i + 1}/${cells.length}`;
+      const cut = cutCell(cells[i]);
+      cuts.push(cut);
+      const r = rows[i];
+      r.img = cut.canvas.toDataURL('image/png');
+      r.start = r.end = '';
+      if (cut.ink < 0.005) { r.code = ''; r.conf = 0; }
+      else {
+        const e = (await engW.recognize(cut.canvas)).data;
+        r.code = e.text.trim().toUpperCase().slice(0, 1);
+        r.conf = r.code ? e.confidence : 0;
+      }
+      prog.value = i + 1;
+    }
+    // 2周目：英字と読めなかったマスを、文字の高さで「*」と「休・有」に分ける
+    // （印刷された「*」は英字より背が低い。英字エンジンは「休」を「*」と読み違えやすい）
+    const hs = cuts.filter((c, i) => LETTERS.includes(rows[i].code) && rows[i].conf >= 80).map(c => c.h).sort((a, b) => a - b);
+    const letterH = hs.length ? hs[hs.length >> 1] : 0;
+    for (let i = 0; i < cells.length; i++) {
+      const r = rows[i], cut = cuts[i];
+      if (cut.ink < 0.005 || (LETTERS.includes(r.code) && r.conf >= 60)) continue;
+      $('ocrMsg').textContent = `「休」「*」の確認中… ${i + 1}/${cells.length}`;
+      if (letterH && cut.h < letterH * 0.8) { r.code = '*'; r.conf = Math.max(r.conf, 75); continue; }
+      const j = (await jpnW.recognize(cut.canvas)).data;
+      const jc = j.text.replace(/\s/g, '').slice(0, 1);
+      if (jc) { r.code = jc; r.conf = Math.max(j.confidence, 60); }
+      else if (LETTERS.includes(r.code)) { /* 自信は低いが英字の候補を残す（黄色で確認） */ }
+      else if (letterH) { r.code = '休'; r.conf = 50; }   // 背が高い記号は休みの可能性が高い（要確認）
+    }
+    saveRows();
+    renderGrid();
+    const low = rows.filter(r => r.conf != null && r.conf < 70).length;
+    $('ocrMsg').textContent = `読み取りが終わりました。自信のない日：${low}件（黄色の行）。手順3で確認してください。`;
+  } catch (err) {
+    console.error(err);
+    $('ocrMsg').textContent = '読み取りに失敗しました：' + err.message;
+  } finally {
+    prog.hidden = true;
+    $('ocr').disabled = false;
+  }
+});
+
+// ---------- .ics 生成 ----------
+function workDays() {
+  const { y, m } = ymParts();
+  const sh = shifts();
+  const out = [];
+  rows.forEach((r, i) => {
+    if (!r.code || OFF.includes(r.code)) return;
+    const def = sh[r.code];
+    const start = r.start || def?.start, end = r.end || def?.end;
+    if (!start || !end) return;
+    out.push({ y, m, d: i + 1, code: r.code, start, end });
+  });
+  return out;
+}
+function summary() {
+  const w = workDays();
+  $('sum').textContent = `出勤 ${w.length}日分を登録します。`;
+}
+
+// 日本時間 → UTC の文字列
+function utc(y, m, d, hm) {
+  const [h, mi] = hm.split(':').map(Number);
+  const t = new Date(Date.UTC(y, m - 1, d, h - 9, mi));
+  return t.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+}
+function minutes(hm) { const [h, m] = hm.split(':').map(Number); return h * 60 + m; }
+function esc(s) { return s.replace(/[\\;,]/g, c => '\\' + c).replace(/\n/g, '\\n'); }
+
+function buildIcs() {
+  const name = $('name').value || '';
+  const prevHm = $('remPrev').value || '21:00';
+  const dayMin = Number($('remDay').value) || 0;
+  const google = $('gmode').checked;
+  const stamp = utc(...(() => { const n = new Date(); return [n.getFullYear(), n.getMonth() + 1, n.getDate(), `${n.getHours()}:${n.getMinutes()}`]; })());
+  const L = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//kintai//shift//JA', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH',
+    'X-WR-CALNAME:シフト', 'X-WR-TIMEZONE:Asia/Tokyo'];
+  const ymd = (y, m, d) => `${y}${String(m).padStart(2, '0')}${String(d).padStart(2, '0')}`;
+  const ev = (uid, y, m, d, s, e, title, alarms) => {
+    L.push('BEGIN:VEVENT', `UID:${uid}@kintai`, `DTSTAMP:${stamp}`,
+      `DTSTART:${utc(y, m, d, s)}`, `DTEND:${utc(y, m, d, e)}`, `SUMMARY:${esc(title)}`);
+    for (const [min, text] of alarms) {
+      L.push('BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${esc(text)}`, `TRIGGER:-PT${min}M`, 'END:VALARM');
+    }
+    L.push('END:VEVENT');
+  };
+  for (const w of workDays()) {
+    const title = `出勤 ${w.code} ${w.start}-${w.end}`;
+    const id = `${name}-${ymd(w.y, w.m, w.d)}`;
+    // 前日夜の通知：開始時刻から前日 remPrev までの分数
+    const prevMin = 24 * 60 - minutes(prevHm) + minutes(w.start);
+    if (!google) {
+      ev(id, w.y, w.m, w.d, w.start, w.end, title, [
+        [prevMin, `明日 ${title}`],
+        [dayMin, `今日 ${title}`],
+      ]);
+    } else {
+      ev(id, w.y, w.m, w.d, w.start, w.end, title, []);
+      const pd = new Date(w.y, w.m - 1, w.d - 1);
+      const pe = minutes(prevHm) + 5;
+      ev(id + '-prev', pd.getFullYear(), pd.getMonth() + 1, pd.getDate(), prevHm,
+        `${String(Math.floor(pe / 60) % 24).padStart(2, '0')}:${String(pe % 60).padStart(2, '0')}`, `🔔明日 ${title}`, []);
+      const ds = Math.max(0, minutes(w.start) - dayMin);
+      const hm = v => `${String(Math.floor(v / 60)).padStart(2, '0')}:${String(v % 60).padStart(2, '0')}`;
+      ev(id + '-day', w.y, w.m, w.d, hm(ds), hm(ds + 5), `🔔今日 ${title}`, []);
+    }
+  }
+  L.push('END:VCALENDAR');
+  return L.join('\r\n') + '\r\n';
+}
+
+function icsFile() {
+  return new File([buildIcs()], `shift-${$('ym').value}.ics`, { type: 'text/calendar' });
+}
+$('dl').addEventListener('click', () => {
+  if (!workDays().length) { alert('出勤日がありません。手順3を確認してください。'); return; }
+  const f = icsFile();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(f); a.download = f.name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+});
+$('share').addEventListener('click', async () => {
+  const f = icsFile();
+  if (navigator.canShare?.({ files: [f] })) {
+    try { await navigator.share({ files: [f], title: f.name }); } catch {}
+  } else alert('この端末は共有に対応していません。「.icsをダウンロード」を使ってください。');
+});
+
+loadRows();
+renderGrid();
+updateHint();
+</script>
+</body>
+</html>
