@@ -36,6 +36,16 @@
   td input[type=time] { width: 6.5em; }
   textarea { width: 100%; font-family: monospace; }
   progress { width: 100%; }
+  .cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+  .cal .wd { text-align: center; font-size: 12px; font-weight: bold; padding: 2px 0; }
+  .cal .wd.sun { color: #dc2626; } .cal .wd.sat { color: #2563eb; }
+  .cal .day { min-height: 58px; border-radius: 6px; padding: 2px 3px; background: #f1f5f9; color: #334155; cursor: pointer; overflow: hidden; }
+  .cal .day .n { font-size: 11px; }
+  .cal .day .c { font-size: 18px; font-weight: bold; text-align: center; line-height: 1.2; }
+  .cal .day .t { font-size: 10px; text-align: center; white-space: pre; line-height: 1.15; }
+  .cal .day.off { background: #dc2626; color: #fff; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 8px; font-size: 12px; }
+  .legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; background: var(--sw); vertical-align: -1px; }
 </style>
 </head>
 <body>
@@ -83,6 +93,13 @@
     <thead><tr><th>日付</th><th>読取</th><th>記号</th><th>時間</th></tr></thead>
     <tbody id="grid"></tbody>
   </table>
+</section>
+
+<section>
+  <h2>月の表示</h2>
+  <div class="cal" id="cal"></div>
+  <div class="legend" id="legend"></div>
+  <p class="small">日付をタップすると、確認表のその日に移動します。</p>
 </section>
 
 <section>
@@ -191,6 +208,7 @@ function renderGrid() {
     const dt = new Date(y, m - 1, i + 1);
     const wd = dt.getDay();
     const tr = document.createElement('tr');
+    tr.id = 'day' + (i + 1);
     if (wd === 0) tr.className = 'sun'; else if (wd === 6) tr.className = 'sat';
     if (r.conf != null && r.conf < 70) tr.classList.add('low');
     const tdD = document.createElement('td'); tdD.className = 'd';
@@ -212,15 +230,73 @@ function renderGrid() {
       st.value = r.start || def?.start || '';
       en.value = r.end || def?.end || '';
     };
-    sel.addEventListener('change', () => { r.code = sel.value; r.start = r.end = ''; r.conf = null; tr.classList.remove('low'); sync(); saveRows(); summary(); });
-    st.addEventListener('change', () => { r.start = st.value; saveRows(); });
-    en.addEventListener('change', () => { r.end = en.value; saveRows(); });
+    sel.addEventListener('change', () => { r.code = sel.value; r.start = r.end = ''; r.conf = null; tr.classList.remove('low'); sync(); saveRows(); summary(); renderCal(); });
+    st.addEventListener('change', () => { r.start = st.value; saveRows(); renderCal(); });
+    en.addEventListener('change', () => { r.end = en.value; saveRows(); renderCal(); });
     sync();
     tdT.append(st, ' ', en);
     tr.append(tdD, tdI, tdS, tdT);
     tb.appendChild(tr);
   });
   summary();
+  renderCal();
+}
+
+// ---------- 月の表示（シフトごとに色分け） ----------
+// 休みは赤。出勤のシフトは記号ごとに、赤と紛れない淡い色を割り当てる
+const SHIFT_COLORS = {
+  A: '#fcd9a0', B: '#b7ecc5', C: '#c9d8ff', D: '#fff1a0', E: '#f6c7e6', F: '#b9ece9',
+  G: '#ddd0fb', H: '#d9e9a9', I: '#ffd1b8', J: '#a9d6f5', K: '#e8d5b5', L: '#c4f0d8',
+  M: '#f3c4f5', N: '#cfd8dc', O: '#fff7c2', P: '#b3e5fc', Q: '#e1bee7', R: '#dcedc8',
+};
+function shiftColor(code) {
+  return { bg: SHIFT_COLORS[code] || '#e2e8f0', fg: '#1e293b' };   // 「他」などは灰色
+}
+function renderCal() {
+  const { y, m } = ymParts();
+  const sh = shifts();
+  const cal = $('cal');
+  cal.innerHTML = '';
+  '日月火水木金土'.split('').forEach((w, i) => {
+    const h = document.createElement('div');
+    h.className = 'wd' + (i === 0 ? ' sun' : i === 6 ? ' sat' : '');
+    h.textContent = w; cal.appendChild(h);
+  });
+  const first = new Date(y, m - 1, 1).getDay();
+  for (let k = 0; k < first; k++) cal.appendChild(document.createElement('div'));
+  const used = new Set();
+  rows.forEach((r, i) => {
+    const cell = document.createElement('div');
+    cell.className = 'day';
+    const def = sh[r.code];
+    const start = r.start || def?.start, end = r.end || def?.end;
+    let code = r.code, time = '';
+    if (OFF.includes(r.code)) { cell.classList.add('off'); code = OFF_TITLE[r.code].replace('休み（*）', '休*'); }
+    else if (r.code) {
+      const c = shiftColor(r.code);
+      cell.style.background = c.bg; cell.style.color = c.fg;
+      if (start && end) time = `${start.replace(/^0/, '')}\n${end.replace(/^0/, '')}`;
+      used.add(r.code);
+    }
+    cell.innerHTML = `<div class="n"></div><div class="c"></div><div class="t"></div>`;
+    cell.querySelector('.n').textContent = i + 1;
+    cell.querySelector('.c').textContent = code;
+    cell.querySelector('.t').textContent = time;
+    cell.addEventListener('click', () => $('day' + (i + 1))?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+    cal.appendChild(cell);
+  });
+  // 凡例（この月に出てくるシフトだけ）
+  const lg = $('legend');
+  lg.innerHTML = '';
+  for (const code of [...used].sort()) {
+    const s = document.createElement('span');
+    s.style.setProperty('--sw', shiftColor(code).bg);
+    s.textContent = sh[code] ? `${code} ${sh[code].start.replace(/^0/, '')}-${sh[code].end.replace(/^0/, '')}` : code;
+    lg.appendChild(s);
+  }
+  const off = document.createElement('span');
+  off.style.setProperty('--sw', '#dc2626'); off.textContent = '休み';
+  lg.appendChild(off);
 }
 
 // ---------- 画像とタップ ----------
